@@ -22,17 +22,21 @@
 (() => {
   'use strict';
   const base = 'http://127.0.0.1:43861';
+  const productionStudioOrigin='https://emote-forge.itschase.workers.dev';
+  function authorizedStudioOrigin(value){try{const url=new URL(value),origin=url.origin;return origin===productionStudioOrigin||(/^http:$/.test(url.protocol)&&['127.0.0.1','localhost'].includes(url.hostname))?origin:''}catch{return ''}}
+  const validId=value=>/^[0-9a-f-]{36}$/i.test(String(value||''));
   if(location.hostname==='emote-forge.itschase.workers.dev'){
+    document.documentElement.dataset.emoteForgeUserscriptVersion='0.9.4';
     const announce=()=>window.postMessage({type:'EMOTE_FORGE_BRIDGE_STATUS',source:'userscript',version:'0.9.4',active:true},location.origin);
-    addEventListener('message',event=>{if(event.source===window&&event.data?.type==='EMOTE_FORGE_BRIDGE_PROBE')announce()});
+    addEventListener('message',event=>{if(event.origin===location.origin&&event.data?.type==='EMOTE_FORGE_BRIDGE_PROBE')announce()});
     announce();return;
   }
   let token = GM_getValue('queueToken','');
   const initialParams=new URLSearchParams(location.search),probeSession=initialParams.get('browser_studio_probe')||'',probeOrigin=initialParams.get('browser_studio_origin')||'';
-  if(probeSession&&probeOrigin){let trusted='';try{trusted=new URL(probeOrigin).origin}catch{}if(trusted){window.opener?.postMessage({type:'EMOTE_FORGE_BRIDGE_STATUS',session:probeSession,version:'0.9.4',active:true},trusted);}return;}
+  if(probeSession&&probeOrigin){const trusted=authorizedStudioOrigin(probeOrigin);if(trusted&&validId(probeSession))window.opener?.postMessage({type:'EMOTE_FORGE_BRIDGE_STATUS',session:probeSession,version:'0.9.4',active:true},trusted);return;}
   if(location.pathname.startsWith('/user/')){
     const profileParams=new URLSearchParams(location.search),profileSession=profileParams.get('browser_studio_profile_session')||'',profileOrigin=profileParams.get('browser_studio_origin')||'';
-    let trustedProfileOrigin='';if(profileSession&&profileOrigin){try{trustedProfileOrigin=new URL(profileOrigin).origin}catch{}}
+    const trustedProfileOrigin=validId(profileSession)?authorizedStudioOrigin(profileOrigin):'';
     if(!token&&!trustedProfileOrigin)return;
     let timer=0,lastPayload='';
     const number=value=>Number(String(value||'').replace(/[^0-9]/g,''))||0;
@@ -118,9 +122,10 @@
     const ordered=[],used=new Set();
     for(const form of forms){
       const src=form.querySelector('img[src^="blob:"]')?.src;if(!src)throw new Error('Missing preview image');const preview=await fetch(src).then(r=>r.blob());
-      let candidates=byHash.get(await digest(preview))||[],item=candidates.find(candidate=>!used.has(candidate));
-      if(!item){try{candidates=byVisualHash.get(await visualDigest(preview))||[];item=candidates.find(candidate=>!used.has(candidate))}catch(error){console.warn('[Emoji queue] preview fingerprint unavailable',error)}}
-      if(!item){const remaining=batch.items.filter(candidate=>!used.has(candidate));if(remaining.length===1)item=remaining[0];}
+      let candidates=(byHash.get(await digest(preview))||[]).filter(candidate=>!used.has(candidate)),item;
+      if(candidates.length>1)throw new Error('Ambiguous exact preview match; metadata was not assigned');
+      if(candidates.length===1)item=candidates[0];
+      if(!item){try{candidates=(byVisualHash.get(await visualDigest(preview))||[]).filter(candidate=>!used.has(candidate));if(candidates.length>1)throw new Error('Ambiguous visual preview match; metadata was not assigned');if(candidates.length===1)item=candidates[0]}catch(error){if(/Ambiguous/.test(error.message))throw error;console.warn('[Emoji queue] preview fingerprint unavailable',error)}}
       if(!item)throw new Error('Preview could not be matched safely to a local image');used.add(item);ordered.push(item);
     }
     if(new Set(ordered).size!==files.length)throw new Error('Duplicate preview mapping');
@@ -129,7 +134,7 @@
       setStage(`filling item ${i+1}/${forms.length}`);
       setValue(form.querySelector('input[name="names[]"]'),uniqueRetryTitle(item));
       form.querySelector('select[name="categories[]"]').value=item.category_value;form.querySelector('select[name="categories[]"]').dispatchEvent(new Event('change',{bubbles:true}));
-      const license=form.querySelector('select[name="licenses[]"]');license.value=item.license==='CC BY 4.0'?'1':'0';license.dispatchEvent(new Event('change',{bubbles:true}));
+      const license=form.querySelector('select[name="licenses[]"]'),normalized=String(item.license||'').toLowerCase().replace(/[^a-z0-9]+/g,' ' ).trim(),option=[...license.options].find(candidate=>candidate.textContent.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()===normalized);if(!option)throw new Error(`Unsupported license: ${item.license}`);license.value=option.value;license.dispatchEvent(new Event('change',{bubbles:true}));
       setValue(form.querySelector('textarea[name="descriptions[]"]'),item.description);
       const accepted=await addTags(form,item.tags||'');
       say(`item ${i+1}/${forms.length}: ${accepted.length} accepted tags`);
@@ -146,8 +151,8 @@
     const results=[...document.querySelectorAll('.list-group-item')].filter(e=>e.querySelector('strong'));
     if(results.length!==files.length)throw new Error(`Submission outcome uncertain: ${results.length}/${files.length} rows`);
     // Result order follows the site's displayed form order, which was mapped by preview hash.
-    const resultByItem=new Map(results.map((el,i)=>{const note=el.innerText.slice(-300),duplicate=/duplicate|already exists|already been submitted/i.test(note);return [ordered[i],{status:el.querySelector('.badge.bg-success')?'submitted':'retry',note:duplicate?`Duplicate reported by Emoji.gg; retrying once with a unique name. ${note}`:note}]}));
-    const outcomes=batch.items.map(item=>resultByItem.get(item));
+    const resultByItem=new Map(results.map((el,i)=>{const note=el.innerText.slice(-300),duplicate=/duplicate|already exists|already been submitted/i.test(note),item=ordered[i];return [item.id,{assetId:item.id,status:el.querySelector('.badge.bg-success')?'submitted':duplicate?'uncertain':'retry',note:duplicate?`Emoji.gg reported a possible duplicate. Review before retrying. ${note}`:note}]}));
+    const outcomes=batch.items.map(item=>resultByItem.get(item.id)||{assetId:item.id,status:'uncertain',note:'No result returned for this asset'});
     writeJournal({batchId:batch.id,itemCount:batch.items.length,phase:'outcomes',outcomes});
     return outcomes;
   }
@@ -155,8 +160,9 @@
   const browserSession=workerParams.get('browser_studio_session')||sessionStorage.getItem('browserStudioSession')||'',browserWorker=workerParams.get('browser_studio_worker')||sessionStorage.getItem('browserStudioWorker')||'',browserOrigin=workerParams.get('browser_studio_origin')||sessionStorage.getItem('browserStudioOrigin')||'';
   if(browserSession&&browserWorker&&browserOrigin){sessionStorage.setItem('browserStudioSession',browserSession);sessionStorage.setItem('browserStudioWorker',browserWorker);sessionStorage.setItem('browserStudioOrigin',browserOrigin);runBrowserWorker().catch(error=>setStage(error.message));return;}
   async function runBrowserWorker(){
-    let origin;try{origin=new URL(browserOrigin).origin;}catch{throw new Error('Invalid Studio origin');}
-    if(!/^https:\/\//.test(origin)&&!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin))throw new Error('Untrusted Studio origin');
+    const origin=authorizedStudioOrigin(browserOrigin);
+    if(!origin)throw new Error('Untrusted Studio origin');
+    if(!validId(browserSession)||!validId(browserWorker))throw new Error('Invalid Studio worker session');
     const params=new URLSearchParams({browser_studio_session:browserSession,browser_studio_worker:browserWorker,browser_studio_origin:origin}),url=path=>`${path}?${params}`;
     if(location.pathname==='/submit/sticker'){setStage('refreshing Emoji.gg upload form');setTimeout(()=>location.replace(url('/submit')),350);return;}
     if(location.pathname!=='/submit')throw new Error('Open the Emoji.gg emoji submit page');
@@ -165,9 +171,11 @@
     const send=(type,data={})=>window.opener?.postMessage({type,session:browserSession,workerId:browserWorker,...data},origin);
     window.addEventListener('message',async event=>{
       if(event.source!==window.opener||event.origin!==origin||event.data?.type!=='EMOTE_FORGE_BATCH'||event.data?.session!==browserSession||event.data?.workerId!==browserWorker||active)return;
-      active=true;const batch=event.data.batch;
-      try{setStage(`uploading ${batch.items.length} items`);const outcomes=await upload(batch,event.data.files||[]);send('EMOTE_FORGE_RESULT',{batchId:batch.id,outcomes});setStage(`${outcomes.filter(item=>item.status==='submitted').length}/${outcomes.length} submitted`);setTimeout(()=>location.replace(url('/submit/sticker')),500);}
-      catch(error){const status=batch?.submittedToSite?'uncertain':'retry',outcomes=(batch?.items||[]).map(()=>({status,note:String(error.message||error).slice(0,300)}));send('EMOTE_FORGE_RESULT',{batchId:batch?.id||'',outcomes,error:String(error.message||error)});setStage(`batch ${status}: ${error.message}`);active=false;}
+      const batch=event.data.batch,files=event.data.files||[],items=batch?.items;
+      if(!validId(batch?.id)||!Array.isArray(items)||items.length<1||items.length>10||files.length!==items.length||new Set(items.map(item=>item?.id)).size!==items.length||items.some(item=>!item||typeof item.id!=='string'||typeof item.filename!=='string'||typeof item.title!=='string')){setStage('rejected malformed batch');return;}
+      active=true;
+      try{setStage(`uploading ${batch.items.length} items`);const outcomes=await upload(batch,files);send('EMOTE_FORGE_RESULT',{batchId:batch.id,outcomes});setStage(`${outcomes.filter(item=>item.status==='submitted').length}/${outcomes.length} submitted`);setTimeout(()=>location.replace(url('/submit/sticker')),500);}
+      catch(error){const status=batch?.submittedToSite?'uncertain':'retry',outcomes=(batch?.items||[]).map(item=>({assetId:item.id,status,note:String(error.message||error).slice(0,300)}));send('EMOTE_FORGE_RESULT',{batchId:batch?.id||'',outcomes,error:String(error.message||error)});setStage(`batch ${status}: ${error.message}`);active=false;}
     });
     send('EMOTE_FORGE_READY');setInterval(()=>send('EMOTE_FORGE_HEARTBEAT',{stage:workerStage,active}),5000);
   }
