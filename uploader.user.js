@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Emoji.gg Upload Studio Worker
 // @namespace    local.emoji.upload.queue
-// @version      0.9.4
+// @version      0.9.5
 // @description  Connects Emoji.gg upload tabs to Emote Forge Upload Studio and submits prepared batches of ten.
 // @license      MIT
 // @homepageURL  https://emote-forge.itschase.workers.dev/
@@ -26,14 +26,14 @@
   function authorizedStudioOrigin(value){try{const url=new URL(value),origin=url.origin;return origin===productionStudioOrigin||(/^http:$/.test(url.protocol)&&['127.0.0.1','localhost'].includes(url.hostname))?origin:''}catch{return ''}}
   const validId=value=>/^[0-9a-f-]{36}$/i.test(String(value||''));
   if(location.hostname==='emote-forge.itschase.workers.dev'){
-    document.documentElement.dataset.emoteForgeUserscriptVersion='0.9.4';
-    const announce=()=>window.postMessage({type:'EMOTE_FORGE_BRIDGE_STATUS',source:'userscript',version:'0.9.4',active:true},location.origin);
+    document.documentElement.dataset.emoteForgeUserscriptVersion='0.9.5';
+    const announce=()=>window.postMessage({type:'EMOTE_FORGE_BRIDGE_STATUS',source:'userscript',version:'0.9.5',active:true},location.origin);
     addEventListener('message',event=>{if(event.origin===location.origin&&event.data?.type==='EMOTE_FORGE_BRIDGE_PROBE')announce()});
     announce();return;
   }
   let token = GM_getValue('queueToken','');
   const initialParams=new URLSearchParams(location.search),probeSession=initialParams.get('browser_studio_probe')||'',probeOrigin=initialParams.get('browser_studio_origin')||'';
-  if(probeSession&&probeOrigin){const trusted=authorizedStudioOrigin(probeOrigin);if(trusted&&validId(probeSession))window.opener?.postMessage({type:'EMOTE_FORGE_BRIDGE_STATUS',session:probeSession,version:'0.9.4',active:true},trusted);return;}
+  if(probeSession&&probeOrigin){const trusted=authorizedStudioOrigin(probeOrigin);if(trusted&&validId(probeSession))window.opener?.postMessage({type:'EMOTE_FORGE_BRIDGE_STATUS',session:probeSession,version:'0.9.5',active:true},trusted);return;}
   if(location.pathname.startsWith('/user/')){
     const profileParams=new URLSearchParams(location.search),profileSession=profileParams.get('browser_studio_profile_session')||'',profileOrigin=profileParams.get('browser_studio_origin')||'';
     const trustedProfileOrigin=validId(profileSession)?authorizedStudioOrigin(profileOrigin):'';
@@ -45,7 +45,7 @@
   }
   if(!['/submit','/submit/sticker'].includes(location.pathname))return;
   if(document.documentElement.dataset.emojiUploadStudioWorker)return;
-  document.documentElement.dataset.emojiUploadStudioWorker='0.9.4';
+  document.documentElement.dataset.emojiUploadStudioWorker='0.9.5';
   let installationId=GM_getValue('installationId','');if(!/^[0-9a-f-]{36}$/i.test(installationId)){installationId=crypto.randomUUID();GM_setValue('installationId',installationId);}
   const workerParams=new URLSearchParams(location.search);if(workerParams.has('upload_studio_worker')){sessionStorage.setItem('uploadStudioManaged','1');sessionStorage.setItem('uploadStudioClientId',workerParams.get('upload_studio_worker'));}const openedByStudio=sessionStorage.getItem('uploadStudioManaged')==='1';
   let clientId=workerParams.get('upload_studio_worker')||sessionStorage.getItem('uploadStudioClientId')||crypto.randomUUID();if(!/^[0-9a-f-]{36}$/i.test(clientId))clientId=crypto.randomUUID();if(openedByStudio)sessionStorage.setItem('uploadStudioClientId',clientId);
@@ -183,7 +183,7 @@
   async function announce(){
     if(helloPromise)return helloPromise;
     helloPromise=(async()=>{
-      const hello=await request('hello',{version:'0.4.0',scriptVersion:'0.9.4',heartbeat:true,clientId,installationId,pageInstanceId,pageStartedAt:performance.timeOrigin,stage:workerStage,progressAt,account:observedAccount()});
+      const hello=await request('hello',{version:'0.4.0',scriptVersion:'0.9.5',heartbeat:true,clientId,installationId,pageInstanceId,pageStartedAt:performance.timeOrigin,stage:workerStage,progressAt,account:observedAccount()});
       if(hello.reloadRequired){const key=`uploadStudioReloaded:${hello.minimumVersion}`;if(!sessionStorage.getItem(key)){sessionStorage.setItem(key,'1');setStage(`updating userscript to ${hello.minimumVersion}`);location.reload();await new Promise(()=>{});}throw new Error(`Userscript ${hello.minimumVersion} must match Upload Studio; update it in Tampermonkey and reload`);}
       if(hello.retire||hello.duplicate){duplicateMode=true;workerSession='';setStage(hello.retire?'surplus worker closing':hello.activeLease?'waiting for active page instance':'duplicate worker closing');if(hello.closeAllowed&&openedByStudio)setTimeout(closeWorkerTab,300);return hello;}
       duplicateMode=false;
